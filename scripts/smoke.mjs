@@ -221,7 +221,6 @@ try {
   const persisted = await req('/api/history', { token: relogin.data.token });
   assert.ok(persisted.data.length >= 2, 'history survives a server restart');
   pass('data persists across restart', `${persisted.data.length} entries after reboot`);
-  server2.kill('SIGTERM');
 
   // SPA serving
   const index = await fetch(`${BASE}/`);
@@ -231,6 +230,7 @@ try {
   const deep = await fetch(`${BASE}/voices`);
   assert.equal(deep.status, 200, 'client-side route falls back to the app shell');
   pass('static app + SPA fallback served', 'GET / and GET /voices');
+  server2.kill('SIGTERM');
 
   console.log(`\n${results.length} checks passed.`);
   process.exit(0);
