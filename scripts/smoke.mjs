@@ -73,7 +73,7 @@ try {
     method: 'POST',
     body: { name: 'Smoke Tester', email, password: 'password123' },
   });
-  assert.equal(reg.status, 200, `register failed: ${JSON.stringify(reg.data)}`);
+  assert.ok([200, 201].includes(reg.status), `register failed: ${JSON.stringify(reg.data)}`);
   assert.ok(reg.data.token?.length > 10, 'register returns a token');
   assert.equal(reg.data.user.email, email);
   const token = reg.data.token;

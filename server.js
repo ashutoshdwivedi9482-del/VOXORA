@@ -148,7 +148,9 @@ app.post('/api/auth/register', authThrottle, (req, res) => {
   if (store.userByEmail(email)) {
     return res.status(409).json({ error: 'An account with this email already exists.' });
   }
-  const user = store.createUser({ name, email, password: hashPassword(password) });
+  const created = store.createUser({ name, email, passwordHash: hashPassword(password) });
+  if (created.error) return res.status(409).json({ error: created.error });
+  const user = created.user;
   return res.status(201).json({ token: signToken(user.id), user: publicUser(user) });
 });
 
@@ -156,7 +158,7 @@ app.post('/api/auth/login', authThrottle, (req, res) => {
   const email = String(req.body?.email || '').toLowerCase().trim();
   const password = String(req.body?.password || '');
   const user = store.userByEmail(email);
-  if (!user || !verifyPassword(password, user.password)) {
+  if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Incorrect email or password.' });
   }
   return res.json({ token: signToken(user.id), user: publicUser(user) });
@@ -476,7 +478,7 @@ app.delete('/api/history/:id', requireAuth, (req, res) => {
 /* ------------------------- favourites ------------------------- */
 
 function favouriteList(userId) {
-  return store.listFavourites(userId).map((row) => ({ voice_id: row.voice_id, name: row.voice_name }));
+  return store.listFavourites(userId).map((row) => ({ voice_id: row.voice_id, name: row.name }));
 }
 
 app.get('/api/favourites', requireAuth, (req, res) => {
@@ -487,8 +489,8 @@ app.post('/api/favourites', requireAuth, (req, res) => {
   const voiceId = String(req.body?.voice_id || '').trim();
   const name = String(req.body?.name || '').trim();
   if (!voiceId || !name) return res.status(400).json({ error: 'Voice ID and name are required.' });
-  const saved = store.toggleFavourite(req.user.id, voiceId, name);
-  return res.json({ saved, favourites: favouriteList(req.user.id) });
+  const result = store.toggleFavourite(req.user.id, { voice_id: voiceId, name });
+  return res.json({ saved: result.saved, favourites: favouriteList(req.user.id) });
 });
 
 /* --------------------------- static --------------------------- */

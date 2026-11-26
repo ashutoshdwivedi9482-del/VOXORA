@@ -54,6 +54,8 @@ function nextId(kind) {
 const publicUser = (u) => (u ? { id: u.id, name: u.name, email: u.email, created_at: u.created_at } : null);
 
 export const store = {
+  backend: 'json-file (atomic writes)',
+
   createUser({ name, email, passwordHash }) {
     const existing = store.userByEmail(email);
     if (existing) return { error: 'An account with that email already exists.' };
@@ -81,14 +83,13 @@ export const store = {
   addGeneration(entry) {
     const record = {
       id: nextId('generation'),
-      user_id: Number(entry.user_id),
+      user_id: Number(entry.userId ?? entry.user_id),
       kind: entry.kind,
-      title: entry.title,
-      text: entry.text || '',
-      voice_id: entry.voice_id || null,
+      title: entry.title || entry.kind,
+      text: entry.text || entry.prompt || '',
+      voice_id: entry.voiceId ?? entry.voice_id ?? null,
       engine: entry.engine || null,
-      audio_url: entry.audio_url || null,
-      download_url: entry.download_url || null,
+      file_name: entry.fileName ?? entry.file_name ?? null,
       created_at: nowIso(),
     };
     db.generations.unshift(record);
@@ -97,8 +98,10 @@ export const store = {
     return record;
   },
 
-  listGenerations(userId) {
-    return db.generations.filter((g) => g.user_id === Number(userId));
+  listGenerations(userId, limit = 100) {
+    return db.generations
+      .filter((g) => g.user_id === Number(userId))
+      .slice(0, Math.max(1, Number(limit) || 100));
   },
 
   generationById(userId, id) {
@@ -111,18 +114,10 @@ export const store = {
     const idx = db.generations.findIndex(
       (g) => g.id === Number(id) && g.user_id === Number(userId),
     );
-    if (idx === -1) return false;
+    if (idx === -1) return null;
     const [removed] = db.generations.splice(idx, 1);
-    if (removed && removed.audio_url) {
-      const file = path.join(GENERATED_DIR, path.basename(removed.audio_url));
-      try {
-        fs.unlinkSync(file);
-      } catch {
-        /* file already gone */
-      }
-    }
     save();
-    return true;
+    return removed;
   },
 
   listFavourites(userId) {
