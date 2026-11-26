@@ -1,244 +1,158 @@
+/**
+ * Persistence layer.
+ *
+ * Uses an atomic JSON document store (write-to-temp + rename) so the app runs on
+ * any Node version without native modules or a paid database service.
+ * Data lives in DATA_DIR, which hosting can mount on a persistent disk later.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 export const GENERATED_DIR = path.join(DATA_DIR, 'generated');
 fs.mkdirSync(GENERATED_DIR, { recursive: true });
 
+const DB_FILE = path.join(DATA_DIR, 'voxora.json');
 const nowIso = () => new Date().toISOString();
 
-/* ------------------------------------------------------------------ *
- * JSON file store (fallback, works on every Node version)
- * ------------------------------------------------------------------ */
-class JsonStore {
-  constructor() {
-    this.backend = 'json-file';
-    this.file = path.join(DATA_DIR, 'voxora.json');
-    this.state = { users: [], generations: [], favourites: [], seq: { users: 0, generations: 0, favourites: 0 } };
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (parsed && Array.isArray(parsed.users)) {
-        this.state = {
-          users: parsed.users || [],
-          generations: parsed.generations || [],
-          favourites: parsed.favourites || [],
-          seq: { ...this.state.seq, ...(parsed.seq || {}) }
-        };
-      }
-    } catch {
-      /* first run */
-    }
-    this.writeQueue = Promise.resolve();
-    this.persist();
-  }
+const empty = () => ({
+  users: [],
+  generations: [],
+  favourites: [],
+  counters: { user: 0, generation: 0, favourite: 0 },
+});
 
-  persist() {
-    const snapshot = JSON.stringify(this.state);
-    this.writeQueue = this.writeQueue
-      .then(() => {
-        const tmp = `${this.file}.tmp`;
-        fs.writeFileSync(tmp, snapshot);
-        fs.renameSync(tmp, this.file);
-      })
-      .catch(() => {});
-    return this.writeQueue;
-  }
-
-  next(kind) {
-    this.state.seq[kind] = (this.state.seq[kind] || 0) + 1;
-    return this.state.seq[kind];
-  }
-
-  createUser({ name, email, password }) {
-    const user = { id: this.next('users'), name, email, password, created_at: nowIso() };
-    this.state.users.push(user);
-    this.persist();
-    return { id: user.id, name: user.name, email: user.email, created_at: user.created_at };
-  }
-
-  userByEmail(email) {
-    return this.state.users.find((u) => u.email === email) || null;
-  }
-
-  userById(id) {
-    return this.state.users.find((u) => u.id === Number(id)) || null;
-  }
-
-  addGeneration({ userId, kind, title, text, voiceId, fileName, engine }) {
-    const row = {
-      id: this.next('generations'),
-      user_id: Number(userId),
-      kind,
-      title: title || '',
-      text: text || '',
-      voice_id: voiceId || null,
-      file_name: fileName || null,
-      engine: engine || null,
-      created_at: nowIso()
+function load() {
+  try {
+    const raw = fs.readFileSync(DB_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const db = empty();
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users : db.users,
+      generations: Array.isArray(parsed.generations) ? parsed.generations : db.generations,
+      favourites: Array.isArray(parsed.favourites) ? parsed.favourites : db.favourites,
+      counters: { ...db.counters, ...(parsed.counters || {}) },
     };
-    this.state.generations.push(row);
-    this.persist();
-    return row;
-  }
-
-  listGenerations(userId, limit = 100) {
-    return this.state.generations
-      .filter((g) => g.user_id === Number(userId))
-      .sort((a, b) => b.id - a.id)
-      .slice(0, limit);
-  }
-
-  generationById(userId, id) {
-    return this.state.generations.find((g) => g.user_id === Number(userId) && g.id === Number(id)) || null;
-  }
-
-  deleteGeneration(userId, id) {
-    const idx = this.state.generations.findIndex((g) => g.user_id === Number(userId) && g.id === Number(id));
-    if (idx === -1) return null;
-    const [row] = this.state.generations.splice(idx, 1);
-    this.persist();
-    return row;
-  }
-
-  listFavourites(userId) {
-    return this.state.favourites.filter((f) => f.user_id === Number(userId));
-  }
-
-  toggleFavourite(userId, voiceId, voiceName) {
-    const uid = Number(userId);
-    const idx = this.state.favourites.findIndex((f) => f.user_id === uid && f.voice_id === voiceId);
-    if (idx !== -1) {
-      this.state.favourites.splice(idx, 1);
-      this.persist();
-      return false;
-    }
-    this.state.favourites.push({ id: this.next('favourites'), user_id: uid, voice_id: voiceId, voice_name: voiceName });
-    this.persist();
-    return true;
+  } catch {
+    return empty();
   }
 }
 
-/* ------------------------------------------------------------------ *
- * SQLite store (preferred when node:sqlite is available, Node >= 22.5)
- * ------------------------------------------------------------------ */
-class SqliteStore {
-  constructor(DatabaseSync) {
-    this.backend = 'sqlite';
-    this.db = new DatabaseSync(path.join(DATA_DIR, 'voxora.db'));
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS generations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        title TEXT NOT NULL,
-        text TEXT,
-        voice_id TEXT,
-        file_name TEXT,
-        engine TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS favourites (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        voice_id TEXT NOT NULL,
-        voice_name TEXT NOT NULL,
-        UNIQUE (user_id, voice_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_generations_user ON generations (user_id, id);
-    `);
-  }
+let db = load();
 
-  createUser({ name, email, password }) {
-    const createdAt = nowIso();
-    const info = this.db
-      .prepare('INSERT INTO users (name, email, password, created_at) VALUES (?, ?, ?, ?)')
-      .run(name, email, password, createdAt);
-    return { id: Number(info.lastInsertRowid), name, email, created_at: createdAt };
-  }
+function save() {
+  const tmp = `${DB_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, DB_FILE);
+}
+
+function nextId(kind) {
+  db.counters[kind] = (db.counters[kind] || 0) + 1;
+  return db.counters[kind];
+}
+
+const publicUser = (u) => (u ? { id: u.id, name: u.name, email: u.email, created_at: u.created_at } : null);
+
+export const store = {
+  createUser({ name, email, passwordHash }) {
+    const existing = store.userByEmail(email);
+    if (existing) return { error: 'An account with that email already exists.' };
+    const user = {
+      id: nextId('user'),
+      name: name || email.split('@')[0],
+      email,
+      password_hash: passwordHash,
+      created_at: nowIso(),
+    };
+    db.users.push(user);
+    save();
+    return { user: publicUser(user) };
+  },
 
   userByEmail(email) {
-    return this.db.prepare('SELECT * FROM users WHERE email = ?').get(email) || null;
-  }
+    if (!email) return null;
+    return db.users.find((u) => u.email.toLowerCase() === String(email).toLowerCase()) || null;
+  },
 
   userById(id) {
-    return this.db.prepare('SELECT * FROM users WHERE id = ?').get(Number(id)) || null;
-  }
+    return db.users.find((u) => u.id === Number(id)) || null;
+  },
 
-  addGeneration({ userId, kind, title, text, voiceId, fileName, engine }) {
-    const createdAt = nowIso();
-    const info = this.db
-      .prepare(
-        'INSERT INTO generations (user_id, kind, title, text, voice_id, file_name, engine, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(Number(userId), kind, title || '', text || '', voiceId || null, fileName || null, engine || null, createdAt);
-    return {
-      id: Number(info.lastInsertRowid),
-      user_id: Number(userId),
-      kind,
-      title: title || '',
-      text: text || '',
-      voice_id: voiceId || null,
-      file_name: fileName || null,
-      engine: engine || null,
-      created_at: createdAt
+  addGeneration(entry) {
+    const record = {
+      id: nextId('generation'),
+      user_id: Number(entry.user_id),
+      kind: entry.kind,
+      title: entry.title,
+      text: entry.text || '',
+      voice_id: entry.voice_id || null,
+      engine: entry.engine || null,
+      audio_url: entry.audio_url || null,
+      download_url: entry.download_url || null,
+      created_at: nowIso(),
     };
-  }
+    db.generations.unshift(record);
+    if (db.generations.length > 2000) db.generations.length = 2000;
+    save();
+    return record;
+  },
 
-  listGenerations(userId, limit = 100) {
-    return this.db
-      .prepare('SELECT * FROM generations WHERE user_id = ? ORDER BY id DESC LIMIT ?')
-      .all(Number(userId), Number(limit));
-  }
+  listGenerations(userId) {
+    return db.generations.filter((g) => g.user_id === Number(userId));
+  },
 
   generationById(userId, id) {
     return (
-      this.db.prepare('SELECT * FROM generations WHERE user_id = ? AND id = ?').get(Number(userId), Number(id)) || null
+      db.generations.find((g) => g.id === Number(id) && g.user_id === Number(userId)) || null
     );
-  }
+  },
 
   deleteGeneration(userId, id) {
-    const row = this.generationById(userId, id);
-    if (!row) return null;
-    this.db.prepare('DELETE FROM generations WHERE id = ?').run(row.id);
-    return row;
-  }
+    const idx = db.generations.findIndex(
+      (g) => g.id === Number(id) && g.user_id === Number(userId),
+    );
+    if (idx === -1) return false;
+    const [removed] = db.generations.splice(idx, 1);
+    if (removed && removed.audio_url) {
+      const file = path.join(GENERATED_DIR, path.basename(removed.audio_url));
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        /* file already gone */
+      }
+    }
+    save();
+    return true;
+  },
 
   listFavourites(userId) {
-    return this.db.prepare('SELECT * FROM favourites WHERE user_id = ?').all(Number(userId));
-  }
+    return db.favourites
+      .filter((f) => f.user_id === Number(userId))
+      .map((f) => ({ voice_id: f.voice_id, name: f.name, created_at: f.created_at }));
+  },
 
-  toggleFavourite(userId, voiceId, voiceName) {
+  toggleFavourite(userId, { voice_id, name }) {
     const uid = Number(userId);
-    const existing = this.db.prepare('SELECT * FROM favourites WHERE user_id = ? AND voice_id = ?').get(uid, voiceId);
-    if (existing) {
-      this.db.prepare('DELETE FROM favourites WHERE id = ?').run(existing.id);
-      return false;
+    const idx = db.favourites.findIndex((f) => f.user_id === uid && f.voice_id === voice_id);
+    if (idx !== -1) {
+      db.favourites.splice(idx, 1);
+      save();
+      return { saved: false, favourites: store.listFavourites(uid) };
     }
-    this.db.prepare('INSERT INTO favourites (user_id, voice_id, voice_name) VALUES (?, ?, ?)').run(uid, voiceId, voiceName);
-    return true;
-  }
-}
+    db.favourites.push({
+      id: nextId('favourite'),
+      user_id: uid,
+      voice_id,
+      name: name || voice_id,
+      created_at: nowIso(),
+    });
+    save();
+    return { saved: true, favourites: store.listFavourites(uid) };
+  },
 
-/* ------------------------------------------------------------------ */
+  stats() {
+    return { users: db.users.length, generations: db.generations.length };
+  },
+};
 
-let store;
-try {
-  const { DatabaseSync } = require('node:sqlite');
-  store = new SqliteStore(DatabaseSync);
-} catch (err) {
-  store = new JsonStore();
-  store.fallbackReason = err && err.message ? err.message : 'node:sqlite unavailable';
-}
-
-export { store };
+export default store;

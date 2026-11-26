@@ -1,60 +1,62 @@
-# VOXORA — Full-stack AI Voice Studio
+# VOXORA — AI Voice Studio
 
-A full-stack starter for an AI voice workspace with:
-- Text-to-speech generation (ElevenLabs)
-- Voice discovery and preview
-- Speech-to-text transcription (OpenAI Whisper API)
-- Sound effects generation (ElevenLabs)
-- JWT authentication
-- SQLite-backed users, favourites and generation history
-- MP3/audio playback and download
-- Responsive React dashboard
+A single-service web app: React (Vite) frontend + Express API, one public URL.
 
-## Requirements
-- Node.js 18+
-- Python 3.10+
-- ElevenLabs API key
-- (Optional) OpenAI API key for transcription
+## Features
 
-## 1. Backend setup
+- **Accounts** — register, sign in, persistent sessions (scrypt password hashing, signed tokens)
+- **Text to speech** — free Google speech engine by default (no API key), ElevenLabs when a key is configured
+- **Voice library** — multilingual voices with real audio previews and favourites
+- **Speech to text** — in-browser microphone transcription (no key) + server Whisper when `OPENAI_API_KEY` is set
+- **Sound effects** — procedural audio synthesis, so it works with zero paid credits
+- **History** — every generation stored per user with playback, download and delete
+- **Favourites** — saved voices, persisted per account
+
+## Run locally
+
 ```bash
-cd backend
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-# Add your API keys in .env
-python app.py
-```
-Backend runs at http://localhost:5000.
-
-## 2. Frontend setup
-Open a second terminal:
-```bash
-cd frontend
 npm install
-cp .env.example .env
-npm run dev
+npm run build    # build the React client into dist/
+npm start        # serves dist/ and /api on http://localhost:3000
 ```
-Frontend runs at http://localhost:5173.
 
-## Environment variables
-Backend `.env`:
-- `SECRET_KEY`: long random secret
-- `ELEVENLABS_API_KEY`: required for real TTS, voice list, sound effects
-- `OPENAI_API_KEY`: optional, required for Whisper transcription
-- `FRONTEND_ORIGIN`: frontend URL
+Development with hot reload:
 
-Frontend `.env`:
-- `VITE_API_URL=http://localhost:5000/api`
+```bash
+npm start            # API on :3000
+npm run dev          # Vite on :5173, proxies /api to :3000
+```
 
-## Deploy
-- Push this folder to GitHub.
-- Deploy `backend/` to Render as a Python web service; build command `pip install -r requirements.txt`, start command `gunicorn app:app`.
-- Deploy `frontend/` to Vercel; framework Vite, root directory `frontend`, build command `npm run build`, output `dist`.
-- Set environment variables on both services. Set frontend `VITE_API_URL` to your deployed backend `/api` URL and backend `FRONTEND_ORIGIN` to your Vercel URL.
-- Use a persistent disk for `backend/uploads` and `backend/generated` if you want uploaded/generated files to survive redeploys. SQLite is suitable for a demo/small project; use PostgreSQL for production/multiple backend instances.
+## API
 
-## Important
-This is complete runnable source code, but real AI generation requires your own provider API keys. API keys stay on the backend and must never be placed in frontend code. The starter uses an explicit consent checkbox for audio uploads and does not implement voice cloning.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/auth/register` | create account, returns token |
+| POST | `/api/auth/login` | sign in, returns token |
+| GET | `/api/auth/me` | current user |
+| GET | `/api/health` | engine + storage status |
+| GET | `/api/voices` | voice library |
+| GET | `/api/voices/:id/preview` | voice preview MP3 |
+| POST | `/api/tts` | generate speech |
+| POST | `/api/transcribe` | save transcript, or transcribe uploaded audio with a key |
+| POST | `/api/sound-effects` | generate sound effect |
+| GET/DELETE | `/api/history`, `/api/history/:id` | list/delete generations |
+| GET/POST | `/api/favourites` | list/toggle favourites |
+
+## Configuration
+
+All optional — the app is fully functional with no keys.
+
+| Variable | Effect |
+| --- | --- |
+| `PORT` | HTTP port (default 3000, set by hosting) |
+| `DATA_DIR` | storage directory (default `./data`) |
+| `JWT_SECRET` | token signing secret (auto-generated and persisted if absent) |
+| `ELEVENLABS_API_KEY` | use ElevenLabs voices for TTS instead of the free engine |
+| `OPENAI_API_KEY` | enables Whisper transcription of uploaded audio files |
+
+## Notes
+
+Storage is a file-backed database inside the app directory. It persists across restarts and
+redeploys that keep the same disk; the free hosting plan has no persistent volume, so a full
+container rebuild starts with an empty database. Guests re-register after such a rebuild.
