@@ -189,7 +189,7 @@ try {
   const history = await req('/api/history', { token });
   assert.equal(history.status, 200);
   const kinds = history.data.map((h) => h.kind);
-  for (const kind of ['tts', 'sound', 'transcript']) {
+  for (const kind of ['tts', 'sound', 'transcription']) {
     assert.ok(kinds.includes(kind), `history contains a ${kind} entry`);
   }
   assert.ok(history.data[0].created_at, 'history entries carry timestamps');
