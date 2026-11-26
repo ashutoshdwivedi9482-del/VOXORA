@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {AudioLines,Mic2,Volume2,History,Heart,LogOut,Menu,X,Upload,Download,Play,Sparkles,Waveform,Trash2,Headphones,Mic,Square} from 'lucide-react';
+import {AudioLines,Mic2,Volume2,History,Heart,LogOut,Menu,X,Upload,Download,Play,Sparkles,AudioWaveform as Waveform,Trash2,Headphones,Mic,Square} from 'lucide-react';
 
 const API=(import.meta.env.VITE_API_URL||'/api').replace(/\/$/,'');
 const ABS=API.startsWith('http')?new URL(API).origin:'';
